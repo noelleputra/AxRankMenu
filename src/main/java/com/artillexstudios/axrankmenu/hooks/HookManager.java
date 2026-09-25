@@ -29,10 +29,10 @@ public class HookManager {
         currency.removeIf(currencyHook -> !currencyHook.isPersistent());
 
         if (CONFIG.getBoolean("hooks.VotePoints.register", false)
-                && Bukkit.getPluginManager().getPlugin("Allium") != null) {
+                && Bukkit.getPluginManager().getPlugin("Votify") != null) {
             currency.add(new VotePointsHook());
             Bukkit.getConsoleSender().sendMessage(StringUtils.formatToString(
-                    "&#33FF33[AxRankMenu] Hooked into Allium VotePoints!"));
+                    "&#33FF33[AxRankMenu] Hooked into Votifae VotePoints!"));
         }
 
         if (CONFIG.getBoolean("hooks.Allium.register", true) && Bukkit.getPluginManager().getPlugin("Allium") != null) {

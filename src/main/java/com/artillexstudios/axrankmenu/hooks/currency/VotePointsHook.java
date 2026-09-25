@@ -78,15 +78,8 @@ public final class VotePointsHook implements CurrencyHook {
 
     @Override
     public void giveBalance(@NotNull Player player, double amount) {
-        long points = toPoints(amount);
-        if (points <= 0) {
-            throw new IllegalArgumentException("Vote point amount must be positive.");
-        }
-        changeBalance(player.getUniqueId(), points, "axrankmenu-adjustment")
-                .exceptionally(error -> {
-                    logFailure("credit", error);
-                    return null;
-                });
+        Bukkit.getLogger().warning("VotePoints cannot be manually credited through AxRankMenu; "
+                + "points are awarded by valid Votifae votes.");
     }
 
     @Override
@@ -129,23 +122,14 @@ public final class VotePointsHook implements CurrencyHook {
     }
 
     public CompletableFuture<Boolean> debit(UUID playerUuid, long amount, String idempotencyKey) {
-        return changeBalance(playerUuid, -amount, "axrankmenu-rank-purchase", idempotencyKey);
-    }
-
-    private CompletableFuture<Boolean> changeBalance(UUID playerUuid, long delta, String reason) {
-        return changeBalance(playerUuid, delta, reason, UUID.randomUUID().toString());
-    }
-
-    private CompletableFuture<Boolean> changeBalance(UUID playerUuid, long delta, String reason, String key) {
-        if (delta == 0 || delta == Long.MIN_VALUE) {
-            throw new IllegalArgumentException("Vote point transactions require a non-zero, positive magnitude.");
+        if (amount <= 0 || idempotencyKey == null || idempotencyKey.isBlank()
+                || idempotencyKey.length() > 128) {
+            throw new IllegalArgumentException("Vote point debit requires a positive amount and idempotency key.");
         }
-        long amount = Math.abs(delta);
-        String operation = delta > 0 ? "credit" : "debit";
-        String body = "{\"amount\":" + amount + ",\"idempotencyKey\":\"" + key
-                + "\",\"reason\":\"" + reason + "\"}";
+        String body = "{\"amount\":" + amount + ",\"idempotencyKey\":\"" + idempotencyKey
+                + "\",\"reason\":\"axrankmenu-rank-purchase\"}";
         HttpRequest request = HttpRequest.newBuilder(baseUri.resolve(
-                        "v1/vote-points/" + playerUuid + "/" + operation))
+                        "v1/vote-points/" + playerUuid + "/debit"))
                 .timeout(requestTimeout)
                 .header("X-Api-Key", apiKey)
                 .header("Accept", "application/json")
@@ -154,12 +138,13 @@ public final class VotePointsHook implements CurrencyHook {
                 .build();
         return sendWithRetry(request, 2)
                 .thenApply(response -> {
-                    if (response.statusCode() == 409 && delta < 0) {
+                    if (response.statusCode() == 409
+                            && response.body().contains("\"insufficient_balance\"")) {
                         return false;
                     }
                     if (response.statusCode() != 200) {
                         throw new CompletionException(new IOException(
-                                "VotePoints API " + operation + " request returned HTTP " + response.statusCode()));
+                                "VotePoints API debit request returned HTTP " + response.statusCode()));
                     }
                     balanceCache.put(playerUuid, parseBalance(response.body()));
                     return true;

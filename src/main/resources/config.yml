@@ -11,7 +11,7 @@ hooks:
     request-timeout-ms: 4000
   VotePoints:
     register: true
-    base-url: "http://127.0.0.1:8765"
+    base-url: "http://127.0.0.1:8766"
     api-key: ""
     connect-timeout-ms: 2000
     request-timeout-ms: 4000
@@ -71,4 +71,4 @@ update-notifier:
   on-join: true
 
 # do not change
-version: 7
+version: 8
