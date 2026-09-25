@@ -3,6 +3,12 @@
 prefix: "<gradient:#FFDD00:#FFFF00><b>AxRankMenu</b></gradient> &7» "
 
 hooks:
+  Allium:
+    register: true
+    base-url: "http://127.0.0.1:8765"
+    api-key: "change-me-to-a-long-random-secret"
+    connect-timeout-ms: 2000
+    request-timeout-ms: 4000
   Vault:
     register: true
   PlayerPoints:

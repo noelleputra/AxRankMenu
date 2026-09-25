@@ -1,23 +1,29 @@
 package com.artillexstudios.axrankmenu.hooks.currency;
 
-import me.TechsCode.UltraEconomy.UltraEconomy;
-import me.TechsCode.UltraEconomy.objects.Account;
-import me.TechsCode.UltraEconomy.objects.Currency;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
+import java.lang.reflect.Method;
 import java.util.Optional;
+import java.util.UUID;
 
 import static com.artillexstudios.axrankmenu.AxRankMenu.CONFIG;
 
 public class UltraEconomyHook implements CurrencyHook {
-    private Currency currency = null;
+    private Object currency = null;
 
     @Override
     public void setup() {
-        final Optional<Currency> currencyOptional = UltraEconomy.getAPI().getCurrencies().name(CONFIG.getString("hooks.UltraEconomy.currency-name", "coins"));
-        if (!currencyOptional.isPresent()) throw new RuntimeException("Currency not found!");
-        currency = currencyOptional.get();
+        try {
+            Object api = Class.forName("me.TechsCode.UltraEconomy.UltraEconomy").getMethod("getAPI").invoke(null);
+            Object currencies = api.getClass().getMethod("getCurrencies").invoke(api);
+            Object optionalCurrency = currencies.getClass().getMethod("name", String.class).invoke(currencies, CONFIG.getString("hooks.UltraEconomy.currency-name", "coins"));
+            Optional<?> currencyOptional = (Optional<?>) optionalCurrency;
+            if (currencyOptional.isEmpty()) throw new RuntimeException("Currency not found!");
+            currency = currencyOptional.get();
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to initialize UltraEconomy hook", e);
+        }
     }
 
     @Override
@@ -32,22 +38,48 @@ public class UltraEconomyHook implements CurrencyHook {
 
     @Override
     public double getBalance(@NotNull Player p) {
-        final Optional<Account> account = UltraEconomy.getAPI().getAccounts().uuid(p.getUniqueId());
-        if (!account.isPresent()) return 0.0D;
-        return account.get().getBalance(currency).getOnHand();
+        try {
+            Object api = Class.forName("me.TechsCode.UltraEconomy.UltraEconomy").getMethod("getAPI").invoke(null);
+            Object accounts = api.getClass().getMethod("getAccounts").invoke(api);
+            Object optionalAccount = accounts.getClass().getMethod("uuid", UUID.class).invoke(accounts, p.getUniqueId());
+            Optional<?> accountOptional = (Optional<?>) optionalAccount;
+            if (accountOptional.isEmpty()) return 0.0D;
+            Object account = accountOptional.get();
+            Method getBalance = account.getClass().getMethod("getBalance", currency.getClass());
+            Object balance = getBalance.invoke(account, currency);
+            return (double) balance.getClass().getMethod("getOnHand").invoke(balance);
+        } catch (ReflectiveOperationException e) {
+            return 0.0D;
+        }
     }
 
     @Override
     public void giveBalance(@NotNull Player p, double amount) {
-        final Optional<Account> account = UltraEconomy.getAPI().getAccounts().uuid(p.getUniqueId());
-        if (!account.isPresent()) return;
-        account.get().addBalance(currency, amount);
+        try {
+            Object api = Class.forName("me.TechsCode.UltraEconomy.UltraEconomy").getMethod("getAPI").invoke(null);
+            Object accounts = api.getClass().getMethod("getAccounts").invoke(api);
+            Object optionalAccount = accounts.getClass().getMethod("uuid", UUID.class).invoke(accounts, p.getUniqueId());
+            Optional<?> accountOptional = (Optional<?>) optionalAccount;
+            if (accountOptional.isEmpty()) return;
+            Object account = accountOptional.get();
+            Method addBalance = account.getClass().getMethod("addBalance", currency.getClass(), double.class);
+            addBalance.invoke(account, currency, amount);
+        } catch (ReflectiveOperationException ignored) {
+        }
     }
 
     @Override
     public void takeBalance(@NotNull Player p, double amount) {
-        final Optional<Account> account = UltraEconomy.getAPI().getAccounts().uuid(p.getUniqueId());
-        if (!account.isPresent()) return;
-        account.get().removeBalance(currency, amount);
+        try {
+            Object api = Class.forName("me.TechsCode.UltraEconomy.UltraEconomy").getMethod("getAPI").invoke(null);
+            Object accounts = api.getClass().getMethod("getAccounts").invoke(api);
+            Object optionalAccount = accounts.getClass().getMethod("uuid", UUID.class).invoke(accounts, p.getUniqueId());
+            Optional<?> accountOptional = (Optional<?>) optionalAccount;
+            if (accountOptional.isEmpty()) return;
+            Object account = accountOptional.get();
+            Method removeBalance = account.getClass().getMethod("removeBalance", currency.getClass(), double.class);
+            removeBalance.invoke(account, currency, amount);
+        } catch (ReflectiveOperationException ignored) {
+        }
     }
 }

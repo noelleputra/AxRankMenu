@@ -2,20 +2,33 @@ package com.artillexstudios.axrankmenu.hooks.currency;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.RegisteredServiceProvider;
 import org.jetbrains.annotations.NotNull;
-import su.nightexpress.excellenteconomy.api.ExcellentEconomyAPI;
-import su.nightexpress.excellenteconomy.api.currency.ExcellentCurrency;
+
+import java.lang.reflect.Method;
 
 import static com.artillexstudios.axrankmenu.AxRankMenu.CONFIG;
 
 public class ExcellentEconomyHook implements CurrencyHook {
-    private ExcellentEconomyAPI api;
-    private ExcellentCurrency currency = null;
+    private Object api;
+    private Object currency = null;
 
     @Override
     public void setup() {
-        api = Bukkit.getServer().getServicesManager().getRegistration(ExcellentEconomyAPI.class).getProvider();
-        currency = api.getCurrency(CONFIG.getString("hooks.ExcellentEconomy.currency-name", "coins"));
+        try {
+            Class<?> apiClass = Class.forName("su.nightexpress.excellenteconomy.api.ExcellentEconomyAPI");
+            for (RegisteredServiceProvider<?> registration : Bukkit.getServer().getServicesManager().getRegistrations(apiClass)) {
+                api = registration.getProvider();
+                break;
+            }
+            if (api == null) {
+                throw new IllegalStateException("ExcellentEconomy API not registered");
+            }
+            Method getCurrency = apiClass.getMethod("getCurrency", String.class);
+            currency = getCurrency.invoke(api, CONFIG.getString("hooks.ExcellentEconomy.currency-name", "coins"));
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to initialize ExcellentEconomy hook", e);
+        }
     }
 
     @Override
@@ -31,18 +44,34 @@ public class ExcellentEconomyHook implements CurrencyHook {
     @Override
     public double getBalance(@NotNull Player p) {
         if (currency == null) return 0;
-        return api.getBalance(p, currency);
+        try {
+            Class<?> currencyClass = Class.forName("su.nightexpress.excellenteconomy.api.currency.ExcellentCurrency");
+            Method getBalance = api.getClass().getMethod("getBalance", Player.class, currencyClass);
+            return (double) getBalance.invoke(api, p, currency);
+        } catch (ReflectiveOperationException e) {
+            return 0;
+        }
     }
 
     @Override
     public void giveBalance(@NotNull Player p, double amount) {
         if (currency == null) return;
-        api.deposit(p, currency, amount);
+        try {
+            Class<?> currencyClass = Class.forName("su.nightexpress.excellenteconomy.api.currency.ExcellentCurrency");
+            Method deposit = api.getClass().getMethod("deposit", Player.class, currencyClass, double.class);
+            deposit.invoke(api, p, currency, amount);
+        } catch (ReflectiveOperationException ignored) {
+        }
     }
 
     @Override
     public void takeBalance(@NotNull Player p, double amount) {
         if (currency == null) return;
-        api.withdraw(p, currency, amount);
+        try {
+            Class<?> currencyClass = Class.forName("su.nightexpress.excellenteconomy.api.currency.ExcellentCurrency");
+            Method withdraw = api.getClass().getMethod("withdraw", Player.class, currencyClass, double.class);
+            withdraw.invoke(api, p, currency, amount);
+        } catch (ReflectiveOperationException ignored) {
+        }
     }
 }

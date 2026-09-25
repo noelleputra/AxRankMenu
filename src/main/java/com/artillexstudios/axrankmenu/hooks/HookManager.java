@@ -2,6 +2,7 @@ package com.artillexstudios.axrankmenu.hooks;
 
 import com.artillexstudios.axapi.reflection.ClassUtils;
 import com.artillexstudios.axapi.utils.StringUtils;
+import com.artillexstudios.axrankmenu.hooks.currency.AlliumHook;
 import com.artillexstudios.axrankmenu.hooks.currency.BeastTokensHook;
 import com.artillexstudios.axrankmenu.hooks.currency.CoinsEngineHook;
 import com.artillexstudios.axrankmenu.hooks.currency.CurrencyHook;
@@ -25,6 +26,11 @@ public class HookManager {
 
     public void updateHooks() {
         currency.removeIf(currencyHook -> !currencyHook.isPersistent());
+
+        if (CONFIG.getBoolean("hooks.Allium.register", true) && Bukkit.getPluginManager().getPlugin("Allium") != null) {
+            currency.add(new AlliumHook());
+            Bukkit.getConsoleSender().sendMessage(StringUtils.formatToString("&#33FF33[AxRankMenu] Hooked into Allium!"));
+        }
 
         if (CONFIG.getBoolean("hooks.Vault.register", true) && Bukkit.getPluginManager().getPlugin("Vault") != null) {
             currency.add(new VaultHook());
