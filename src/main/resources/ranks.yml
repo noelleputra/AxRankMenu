@@ -17,7 +17,8 @@ VIP:
   server: ""
   # the price of the rank (check the hooks section)
   price: 1000.0
-  # check the hooks section
+  # Supported: Vault, Allium, VotePoints, and configured economy hooks.
+  # Set to VotePoints to charge the separate balance earned from Votifae votes.
   currency: Vault
   # where the item should be in the /ranks gui?
   slot: 12

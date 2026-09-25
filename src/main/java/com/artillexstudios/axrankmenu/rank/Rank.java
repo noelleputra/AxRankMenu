@@ -1,12 +1,15 @@
 package com.artillexstudios.axrankmenu.rank;
 
+import com.artillexstudios.axrankmenu.AxRankMenu;
 import com.artillexstudios.axapi.libs.boostedyaml.block.implementation.Section;
 import com.artillexstudios.axapi.libs.boostedyaml.settings.general.GeneralSettings;
 import com.artillexstudios.axapi.scheduler.Scheduler;
 import com.artillexstudios.axapi.utils.NumberUtils;
 import com.artillexstudios.axapi.utils.StringUtils;
 import com.artillexstudios.axrankmenu.hooks.HookManager;
+import com.artillexstudios.axrankmenu.hooks.currency.AlliumHook;
 import com.artillexstudios.axrankmenu.hooks.currency.CurrencyHook;
+import com.artillexstudios.axrankmenu.hooks.currency.VotePointsHook;
 import com.artillexstudios.axrankmenu.utils.ItemBuilderUtil;
 import com.artillexstudios.axrankmenu.utils.PlaceholderUtils;
 import dev.triumphteam.gui.guis.GuiItem;
@@ -24,6 +27,9 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.artillexstudios.axrankmenu.AxRankMenu.CONFIG;
 import static com.artillexstudios.axrankmenu.AxRankMenu.LANG;
@@ -31,6 +37,7 @@ import static com.artillexstudios.axrankmenu.AxRankMenu.MESSAGEUTILS;
 import static com.artillexstudios.axrankmenu.AxRankMenu.RANKS;
 
 public class Rank {
+    private static final Set<UUID> REMOTE_CURRENCY_PURCHASES = ConcurrentHashMap.newKeySet();
     private static final LuckPerms luckPerms = LuckPermsProvider.get();
     private final Group group;
     private final Section section;
@@ -123,43 +130,118 @@ public class Rank {
             final CurrencyHook hook = HookManager.getCurrencyHook(currency);
             if (hook == null) return;
 
+            if (hook instanceof VotePointsHook votePointsHook) {
+                purchaseWithRemoteDebit("VotePoints", price, amount -> votePointsHook.debit(
+                        requester.getUniqueId(), amount, UUID.randomUUID().toString()));
+                return;
+            }
+            if (hook instanceof AlliumHook alliumHook) {
+                purchaseWithRemoteDebit("Allium", price, amount -> alliumHook.debit(
+                        requester.getUniqueId(), amount, UUID.randomUUID().toString()));
+                return;
+            }
+
             if (hook.getBalance(requester) < price) {
                 MESSAGEUTILS.sendLang(requester, "buy.no-currency");
                 return;
             }
 
             hook.takeBalance(requester, price);
+            executeBuyActions(requester.getUniqueId(), requester.getName(), price);
+        });
+    }
 
-            var actions = section.getStringList("buy-actions");
-            if (actions.isEmpty()) {
-                Bukkit.getConsoleSender().sendMessage(StringUtils.formatToString("&#FF0000[AxRankMenu] The buy-actions section is missing from the " + section.getString("rank") + " rank, this will cause issues!"));
+    private void purchaseWithRemoteDebit(
+            String currencyName,
+            double price,
+            java.util.function.LongFunction<java.util.concurrent.CompletableFuture<Boolean>> debitRequest) {
+        if (!Double.isFinite(price) || price < 0 || price > Long.MAX_VALUE || price != Math.rint(price)) {
+            MESSAGEUTILS.sendLang(requester, "buy.no-currency");
+            return;
+        }
+        UUID playerUuid = requester.getUniqueId();
+        String playerName = requester.getName();
+        if (price == 0) {
+            executeBuyActions(playerUuid, playerName, price);
+            return;
+        }
+        if (!REMOTE_CURRENCY_PURCHASES.add(playerUuid)) {
+            MESSAGEUTILS.sendLang(requester, "buy.no-currency");
+            return;
+        }
+        try {
+            debitRequest.apply((long) price).whenComplete((debited, error) ->
+                    Scheduler.get().run(requester, task -> {
+                            REMOTE_CURRENCY_PURCHASES.remove(playerUuid);
+                            if (error != null) {
+                                AxRankMenu.getInstance().getLogger().warning(
+                                        currencyName + " rank purchase could not be confirmed for " + playerUuid
+                                                + "; no rank actions were run.");
+                                Player online = Bukkit.getPlayer(playerUuid);
+                                if (online != null) {
+                                    MESSAGEUTILS.sendLang(online, "buy.no-currency");
+                                }
+                            } else if (Boolean.TRUE.equals(debited)) {
+                                executeBuyActions(playerUuid, playerName, price);
+                            } else {
+                                Player online = Bukkit.getPlayer(playerUuid);
+                                if (online != null) {
+                                    MESSAGEUTILS.sendLang(online, "buy.no-currency");
+                                }
+                            }
+                        }, () -> {
+                            REMOTE_CURRENCY_PURCHASES.remove(playerUuid);
+                            if (error != null || Boolean.TRUE.equals(debited)) {
+                                AxRankMenu.getInstance().getLogger().warning(
+                                        currencyName + " rank purchase finished after " + playerUuid
+                                                + " left; check the transaction before retrying.");
+                            }
+                        }));
+        } catch (RuntimeException exception) {
+            REMOTE_CURRENCY_PURCHASES.remove(playerUuid);
+            AxRankMenu.getInstance().getLogger().log(
+                    java.util.logging.Level.SEVERE,
+                    currencyName + " rank purchase could not be started for " + playerUuid + ".",
+                    exception);
+            MESSAGEUTILS.sendLang(requester, "buy.no-currency");
+        }
+    }
+
+    private void executeBuyActions(UUID playerUuid, String playerName, double price) {
+        var actions = section.getStringList("buy-actions");
+        if (actions.isEmpty()) {
+            Bukkit.getConsoleSender().sendMessage(StringUtils.formatToString(
+                    "&#FF0000[AxRankMenu] The buy-actions section is missing from the "
+                            + section.getString("rank") + " rank, this will cause issues!"));
+        }
+        for (String action : actions) {
+            final String[] type = action.split(" ", 2);
+            if (type.length != 2) {
+                continue;
             }
-            for (String action : actions) { // todo: add a warning if missing
-                final String[] type = action.split(" ");
-                String ac = action.replace(type[0] + " ", "");
-                ac = ac.replace("%player%", requester.getName());
-                ac = ac.replace("%name%", section.getString("item.name"));
-                ac = ac.replace("%rank%", section.getString("rank"));
-                ac = ac.replace("%price%", section.getString("price", "---"));
-                ac = ac.replace("%server%", section.getString("server"));
-
-                switch (type[0]) {
-                    case "[MESSAGE]": {
-                        requester.sendMessage(StringUtils.formatToString(ac));
-                        break;
-                    }
-                    case "[CONSOLE]": {
-                        String finalAc = ac;
-                        Scheduler.get().execute(() -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), finalAc));
-                        break;
-                    }
-                    case "[CLOSE]": {
-                        requester.closeInventory();
-                        break;
+            String formatted = type[1].replace("%player%", playerName)
+                    .replace("%name%", section.getString("item.name"))
+                    .replace("%rank%", section.getString("rank"))
+                    .replace("%price%", section.getString("price", "---"))
+                    .replace("%server%", section.getString("server"));
+            Player online = Bukkit.getPlayer(playerUuid);
+            switch (type[0]) {
+                case "[MESSAGE]" -> {
+                    if (online != null) {
+                        online.sendMessage(StringUtils.formatToString(formatted));
                     }
                 }
+                case "[CONSOLE]" -> Scheduler.get().execute(
+                        () -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), formatted));
+                case "[CLOSE]" -> {
+                    if (online != null) {
+                        online.closeInventory();
+                    }
+                }
+                default -> {
+                }
             }
-        });
+        }
     }
 
     @Nullable

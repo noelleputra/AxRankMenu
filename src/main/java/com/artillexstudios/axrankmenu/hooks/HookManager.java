@@ -11,6 +11,7 @@ import com.artillexstudios.axrankmenu.hooks.currency.PlayerPointsHook;
 import com.artillexstudios.axrankmenu.hooks.currency.RoyaleEconomyHook;
 import com.artillexstudios.axrankmenu.hooks.currency.UltraEconomyHook;
 import com.artillexstudios.axrankmenu.hooks.currency.VaultHook;
+import com.artillexstudios.axrankmenu.hooks.currency.VotePointsHook;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
@@ -26,6 +27,13 @@ public class HookManager {
 
     public void updateHooks() {
         currency.removeIf(currencyHook -> !currencyHook.isPersistent());
+
+        if (CONFIG.getBoolean("hooks.VotePoints.register", false)
+                && Bukkit.getPluginManager().getPlugin("Allium") != null) {
+            currency.add(new VotePointsHook());
+            Bukkit.getConsoleSender().sendMessage(StringUtils.formatToString(
+                    "&#33FF33[AxRankMenu] Hooked into Allium VotePoints!"));
+        }
 
         if (CONFIG.getBoolean("hooks.Allium.register", true) && Bukkit.getPluginManager().getPlugin("Allium") != null) {
             currency.add(new AlliumHook());
@@ -69,7 +77,15 @@ public class HookManager {
             Bukkit.getConsoleSender().sendMessage(StringUtils.formatToString("&#33FF33[AxRankMenu] Hooked into BeastTokens!"));
         }
         
-        for (CurrencyHook hook : currency) hook.setup();
+        for (CurrencyHook hook : new ArrayList<>(currency)) {
+            try {
+                hook.setup();
+            } catch (RuntimeException exception) {
+                currency.remove(hook);
+                Bukkit.getLogger().log(java.util.logging.Level.SEVERE,
+                        "[AxRankMenu] Could not initialize currency hook " + hook.getName() + ".", exception);
+            }
+        }
 
         if (currency.isEmpty()) {
             Bukkit.getConsoleSender().sendMessage(StringUtils.formatToString("&#FF3333[AxRankMenu] Currency hook not found! Please check your config.yml!"));

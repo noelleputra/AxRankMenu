@@ -8,6 +8,7 @@ depend:
   - LuckPerms
 
 softdepend:
+  - Allium
   - PlaceholderAPI
   - CoinsEngine
   - ExcellentEconomy
