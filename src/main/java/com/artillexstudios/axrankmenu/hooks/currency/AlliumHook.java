@@ -1,67 +1,41 @@
 package com.artillexstudios.axrankmenu.hooks.currency;
 
+import com.artillexstudios.axrankmenu.AxRankMenu;
+import dev.noellx.allium.api.AlliumCurrencyService;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 
-import static com.artillexstudios.axrankmenu.AxRankMenu.CONFIG;
-
-public class AlliumHook implements CurrencyHook {
-    private static final Pattern BALANCE_PATTERN = Pattern.compile("\"balance\"\\s*:\\s*(-?\\d+)");
-    private static final Pattern ERROR_PATTERN = Pattern.compile("\"error\"\\s*:\\s*\"([^\"]+)\"");
-
-    private HttpClient httpClient;
-    private URI baseUrl;
-    private String apiKey;
-    private Duration requestTimeout;
+public final class AlliumHook implements CurrencyHook {
+    private static final long BALANCE_CACHE_TTL_MILLIS = 5_000L;
+    private static final int MAX_BALANCE_CACHE_ENTRIES = 4096;
+    private static final int MAX_PENDING_BALANCE_LOOKUPS = 128;
+    private final Set<UUID> pendingLookups = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, BalanceCacheEntry> balanceCache = Collections.synchronizedMap(
+            new LinkedHashMap<>(128, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<UUID, BalanceCacheEntry> eldest) {
+                    return size() > MAX_BALANCE_CACHE_ENTRIES;
+                }
+            });
+    private AlliumCurrencyService service;
 
     @Override
     public void setup() {
-        final String baseUrlValue = CONFIG.getString("hooks.Allium.base-url", "http://127.0.0.1:8765");
-        final String apiKeyValue = CONFIG.getString("hooks.Allium.api-key", "");
-        final int connectTimeoutMillis = CONFIG.getInt("hooks.Allium.connect-timeout-ms", 2000);
-        final int requestTimeoutMillis = CONFIG.getInt("hooks.Allium.request-timeout-ms", 4000);
-
-        if (baseUrlValue == null || baseUrlValue.isBlank()) {
-            throw new IllegalStateException("Allium base-url is not configured");
+        service = Bukkit.getServicesManager().load(AlliumCurrencyService.class);
+        if (service == null) {
+            throw new IllegalStateException("Allium Bukkit currency service is unavailable.");
         }
-        if (apiKeyValue == null || apiKeyValue.length() < 32) {
-            throw new IllegalStateException("Allium api-key must contain at least 32 characters");
-        }
-
-        URI configuredUri = URI.create(baseUrlValue.endsWith("/") ? baseUrlValue : baseUrlValue + "/");
-        String scheme = configuredUri.getScheme();
-        boolean localHttp = "http".equalsIgnoreCase(scheme) && configuredUri.getHost() != null
-                && ("localhost".equalsIgnoreCase(configuredUri.getHost())
-                || "127.0.0.1".equals(configuredUri.getHost())
-                || "::1".equals(configuredUri.getHost()));
-        if (!"https".equalsIgnoreCase(scheme) && !localHttp
-                || configuredUri.getHost() == null || configuredUri.getUserInfo() != null
-                || configuredUri.getQuery() != null || configuredUri.getFragment() != null) {
-            throw new IllegalStateException("Allium API must use HTTPS unless it is on loopback, without URL credentials.");
-        }
-        this.baseUrl = configuredUri;
-        this.apiKey = apiKeyValue;
-        if (connectTimeoutMillis < 250 || requestTimeoutMillis < 250) {
-            throw new IllegalStateException("Allium request timeouts must be at least 250ms");
-        }
-        this.requestTimeout = Duration.ofMillis(requestTimeoutMillis);
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(connectTimeoutMillis))
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
     }
 
     @Override
@@ -75,114 +49,105 @@ public class AlliumHook implements CurrencyHook {
     }
 
     @Override
-    public double getBalance(@NotNull Player p) {
-        try {
-            return parseBalance(callApi("GET", p.getUniqueId().toString(), null));
-        } catch (IOException | InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return 0D;
+    public double getBalance(@NotNull Player player) {
+        UUID uuid = player.getUniqueId();
+        long now = System.currentTimeMillis();
+        BalanceCacheEntry entry;
+        boolean refresh = false;
+        synchronized (balanceCache) {
+            entry = balanceCache.get(uuid);
+            if (entry == null) {
+                entry = new BalanceCacheEntry(0L, 0L);
+            }
+            if (now - entry.lastAttemptAt() >= BALANCE_CACHE_TTL_MILLIS) {
+                entry = new BalanceCacheEntry(entry.balance(), now);
+                refresh = true;
+            }
+            balanceCache.put(uuid, entry);
         }
+        if (refresh) {
+            refreshBalance(uuid);
+        }
+        return entry.balance();
     }
 
     @Override
-    public void giveBalance(@NotNull Player p, double amount) {
-        try {
-            callApi("POST", p.getUniqueId().toString() + "/credit", String.valueOf(Math.round(amount)));
-        } catch (IOException | InterruptedException ignored) {
-        }
-    }
-
-    @Override
-    public void takeBalance(@NotNull Player p, double amount) {
-        try {
-            callApi("POST", p.getUniqueId().toString() + "/debit", String.valueOf(Math.round(amount)));
-        } catch (IOException | InterruptedException ignored) {
-        }
-    }
-
-    public CompletableFuture<Boolean> debit(UUID playerUuid, long amount, String idempotencyKey) {
-        String payload = "{\"amount\":" + amount + ",\"idempotencyKey\":\"" + idempotencyKey
-                + "\",\"reason\":\"axrankmenu-shop\"}";
-        HttpRequest request = HttpRequest.newBuilder(baseUrl.resolve(
-                        "v1/currency/" + playerUuid + "/debit"))
-                .timeout(requestTimeout)
-                .header("X-Api-Key", apiKey)
-                .header("Accept", "application/json")
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(payload))
-                .build();
-        return sendWithRetry(request, 2)
-                .thenApply(response -> {
-                    if (response.statusCode() == 409) {
-                        return false;
-                    }
-                    if (response.statusCode() != 200) {
-                        throw new CompletionException(new IOException(
-                                "Allium API debit returned HTTP " + response.statusCode()));
-                    }
-                    return true;
+    public void giveBalance(@NotNull Player player, double amount) {
+        long credits = toCredits(amount);
+        UUID uuid = player.getUniqueId();
+        service.credit(uuid, credits, UUID.randomUUID().toString(), "allium-plugin-credit")
+                .thenAccept(result -> updateCachedBalance(uuid, result.balance()))
+                .exceptionally(error -> {
+                    logFailure("credit", uuid, error);
+                    return null;
                 });
     }
 
-    private CompletableFuture<HttpResponse<String>> sendWithRetry(HttpRequest request, int retriesRemaining) {
-        CompletableFuture<HttpResponse<String>> result = new CompletableFuture<>();
-        httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).whenComplete((response, error) -> {
-            if ((error != null || response.statusCode() >= 500) && retriesRemaining > 0) {
-                CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS).execute(() ->
-                        sendWithRetry(request, retriesRemaining - 1).whenComplete((retryResponse, retryError) -> {
-                            if (retryError != null) {
-                                result.completeExceptionally(retryError);
-                            } else {
-                                result.complete(retryResponse);
-                            }
-                        }));
-            } else if (error != null) {
-                result.completeExceptionally(error);
-            } else {
-                result.complete(response);
+    @Override
+    public void takeBalance(@NotNull Player player, double amount) {
+        long credits = toCredits(amount);
+        UUID uuid = player.getUniqueId();
+        debit(uuid, credits, UUID.randomUUID().toString())
+                .thenAccept(debited -> {
+                    if (!debited) {
+                        Bukkit.getLogger().warning("Allium debit failed: insufficient balance for " + uuid);
+                    }
+                })
+                .exceptionally(error -> {
+                    logFailure("debit", uuid, error);
+                    return null;
+                });
+    }
+
+    public CompletableFuture<Boolean> debit(UUID playerUuid, long amount, String idempotencyKey) {
+        if (playerUuid == null || amount <= 0 || idempotencyKey == null || idempotencyKey.isBlank()
+                || idempotencyKey.length() > 128) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid Allium debit request."));
+        }
+        return service.debit(playerUuid, amount, idempotencyKey, "axrankmenu-rank-purchase").thenApply(result -> {
+            if (result.balance() >= 0) {
+                updateCachedBalance(playerUuid, result.balance());
             }
+            return result.applied();
         });
-        return result;
     }
 
-    private long parseBalance(String responseBody) {
-        if (responseBody == null || responseBody.isBlank()) {
-            return 0L;
+    private void refreshBalance(UUID playerUuid) {
+        if (pendingLookups.size() >= MAX_PENDING_BALANCE_LOOKUPS || !pendingLookups.add(playerUuid)) {
+            return;
         }
-
-        final Matcher matcher = BALANCE_PATTERN.matcher(responseBody);
-        if (matcher.find()) {
-            return Long.parseLong(matcher.group(1));
-        }
-
-        final Matcher errorMatcher = ERROR_PATTERN.matcher(responseBody);
-        if (errorMatcher.find()) {
-            throw new IllegalStateException("Allium API error: " + errorMatcher.group(1));
-        }
-
-        return 0L;
-    }
-
-    private String callApi(String method, String path, String amount) throws IOException, InterruptedException {
-        final HttpRequest.Builder builder = HttpRequest.newBuilder(baseUrl.resolve("v1/currency/" + path))
-                .header("X-Api-Key", apiKey)
-                .header("Accept", "application/json");
-
-        if ("GET".equalsIgnoreCase(method)) {
-            builder.GET();
-        } else {
-            if (amount == null) {
-                throw new IllegalArgumentException("Amount required for Allium transaction");
+        service.getBalance(playerUuid).whenComplete((balance, error) -> {
+            pendingLookups.remove(playerUuid);
+            if (error != null) {
+                logFailure("balance lookup", playerUuid, error);
+                return;
             }
-            final String payload = "{\"amount\":" + amount + ",\"idempotencyKey\":\"axrankmenu-" + System.currentTimeMillis() + "-" + path.replace("/", "-") + "\",\"reason\":\"axrankmenu-shop\"}";
-            builder.POST(HttpRequest.BodyPublishers.ofString(payload))
-                    .header("Content-Type", "application/json");
-        }
-
-        final HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IOException("Allium API returned HTTP " + response.statusCode() + " body=" + response.body());
-        }
-        return response.body();
+            updateCachedBalance(playerUuid, balance);
+        });
     }
+
+    private void updateCachedBalance(UUID playerUuid, long balance) {
+        synchronized (balanceCache) {
+            balanceCache.put(playerUuid, new BalanceCacheEntry(balance, System.currentTimeMillis()));
+        }
+    }
+
+    private long toCredits(double amount) {
+        if (!Double.isFinite(amount) || amount <= 0 || amount > Long.MAX_VALUE
+                || amount != Math.rint(amount)) {
+            throw new IllegalArgumentException("Allium amounts must be positive whole numbers.");
+        }
+        return (long) amount;
+    }
+
+    private void logFailure(String operation, UUID playerUuid, Throwable error) {
+        Throwable cause = error;
+        while (cause instanceof CompletionException && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        AxRankMenu.getInstance().getLogger().log(
+                Level.SEVERE, "Allium " + operation + " failed for " + playerUuid + ".", cause);
+    }
+
+    private record BalanceCacheEntry(long balance, long lastAttemptAt) {}
 }

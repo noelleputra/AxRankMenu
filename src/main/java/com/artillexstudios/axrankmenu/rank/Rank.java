@@ -174,9 +174,16 @@ public class Rank {
                     Scheduler.get().run(requester, task -> {
                             REMOTE_CURRENCY_PURCHASES.remove(playerUuid);
                             if (error != null) {
-                                AxRankMenu.getInstance().getLogger().warning(
+                                Throwable cause = error;
+                                while (cause instanceof java.util.concurrent.CompletionException
+                                        && cause.getCause() != null) {
+                                    cause = cause.getCause();
+                                }
+                                AxRankMenu.getInstance().getLogger().log(
+                                        java.util.logging.Level.WARNING,
                                         currencyName + " rank purchase could not be confirmed for " + playerUuid
-                                                + "; no rank actions were run.");
+                                                + "; no rank actions were run.",
+                                        cause);
                                 Player online = Bukkit.getPlayer(playerUuid);
                                 if (online != null) {
                                     MESSAGEUTILS.sendLang(online, "buy.no-currency");
