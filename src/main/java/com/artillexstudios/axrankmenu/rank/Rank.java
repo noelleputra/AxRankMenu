@@ -131,12 +131,12 @@ public class Rank {
             if (hook == null) return;
 
             if (hook instanceof VotePointsHook votePointsHook) {
-                purchaseWithRemoteDebit("VotePoints", price, amount -> votePointsHook.debit(
+                purchaseWithAtomicDebit("VotePoints", price, amount -> votePointsHook.debit(
                         requester.getUniqueId(), amount, UUID.randomUUID().toString()));
                 return;
             }
             if (hook instanceof AlliumHook alliumHook) {
-                purchaseWithRemoteDebit("Allium", price, amount -> alliumHook.debit(
+                purchaseWithAtomicDebit("Allium", price, amount -> alliumHook.debit(
                         requester.getUniqueId(), amount, UUID.randomUUID().toString()));
                 return;
             }
@@ -151,7 +151,7 @@ public class Rank {
         });
     }
 
-    private void purchaseWithRemoteDebit(
+    private void purchaseWithAtomicDebit(
             String currencyName,
             double price,
             java.util.function.LongFunction<java.util.concurrent.CompletableFuture<Boolean>> debitRequest) {

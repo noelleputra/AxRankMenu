@@ -139,6 +139,12 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>dev.noellx.nullaelib</groupId>
+            <artifactId>Nullaelib</artifactId>
+            <version>1.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>com.github.MilkBowl</groupId>
             <artifactId>VaultAPI</artifactId>
             <version>1.7</version>

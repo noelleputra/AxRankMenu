@@ -5,12 +5,14 @@
 AxRankMenu exposes `VotePoints` as a separate currency owned by Votifae. It
 is not the same balance as Allium Credits.
 
-Configure `hooks.VotePoints.api-key` in `plugins/AxRankMenu/config.yml` using
-the `vote-points.api.api-key` from Votifae. Rank purchases call Votifae
-asynchronously and debit the balance atomically before purchase actions run.
-API errors fail closed and do not execute actions.
-If upgrading an existing install, change the VotePoints `base-url` from the
-old Allium endpoint to `http://127.0.0.1:8766` when both plugins share a host.
+Install Nullaelib and Votifae on the same backend. AxRankMenu discovers the
+asynchronous `VotePointsService` through Bukkit ServicesManager; no HTTP
+endpoint, port, or API key is required. Rank purchases debit the balance
+atomically before purchase actions run. Service/database errors fail closed
+and do not execute actions.
+
+When upgrading, remove old VotePoints URL, API-key, and timeout settings from
+`plugins/AxRankMenu/config.yml`; only `hooks.VotePoints.register` is used now.
 
 Select the currency for an individual rank in `plugins/AxRankMenu/ranks.yml`:
 
