@@ -17,6 +17,7 @@ import com.artillexstudios.axapi.utils.logging.LoggerNameFormat;
 import com.artillexstudios.axrankmenu.commands.Commands;
 import com.artillexstudios.axrankmenu.gui.GuiUpdater;
 import com.artillexstudios.axrankmenu.hooks.HookManager;
+import com.artillexstudios.axrankmenu.rank.PurchaseRecoveryStore;
 import com.artillexstudios.axrankmenu.utils.UpdateNotifier;
 import org.bstats.bukkit.Metrics;
 
@@ -29,6 +30,7 @@ public final class AxRankMenu extends AxPlugin {
     public static MessageUtils MESSAGEUTILS;
     private static AxPlugin instance;
     private static AxMetrics metrics;
+    private static PurchaseRecoveryStore purchaseRecoveryStore;
 
     public static AxPlugin getInstance() {
         return instance;
@@ -50,6 +52,8 @@ public final class AxRankMenu extends AxPlugin {
     @Override
     public void enable() {
         instance = this;
+        purchaseRecoveryStore = new PurchaseRecoveryStore(
+                new File(getDataFolder(), "pending-purchases.properties").toPath());
 
         new Metrics(this, 20079);
 
@@ -77,8 +81,16 @@ public final class AxRankMenu extends AxPlugin {
 
     @Override
     public void disable() {
+        if (purchaseRecoveryStore != null) {
+            purchaseRecoveryStore.shutdown();
+            purchaseRecoveryStore = null;
+        }
         if (metrics != null) metrics.cancel();
         GuiUpdater.stop();
+    }
+
+    public static PurchaseRecoveryStore getPurchaseRecoveryStore() {
+        return purchaseRecoveryStore;
     }
 
     @Override

@@ -131,13 +131,13 @@ public class Rank {
             if (hook == null) return;
 
             if (hook instanceof VotePointsHook votePointsHook) {
-                purchaseWithAtomicDebit("VotePoints", price, amount -> votePointsHook.debit(
-                        requester.getUniqueId(), amount, UUID.randomUUID().toString()));
+                purchaseWithAtomicDebit("VotePoints", price, (amount, purchaseKey) -> votePointsHook.debit(
+                        requester.getUniqueId(), amount, purchaseKey), section.getString("rank"));
                 return;
             }
             if (hook instanceof AlliumHook alliumHook) {
-                purchaseWithAtomicDebit("Allium", price, amount -> alliumHook.debit(
-                        requester.getUniqueId(), amount, UUID.randomUUID().toString()));
+                purchaseWithAtomicDebit("Allium", price, (amount, purchaseKey) -> alliumHook.debit(
+                        requester.getUniqueId(), amount, purchaseKey), section.getString("rank"));
                 return;
             }
 
@@ -154,7 +154,8 @@ public class Rank {
     private void purchaseWithAtomicDebit(
             String currencyName,
             double price,
-            java.util.function.LongFunction<java.util.concurrent.CompletableFuture<Boolean>> debitRequest) {
+            java.util.function.BiFunction<Long, String, java.util.concurrent.CompletableFuture<Boolean>> debitRequest,
+            String rankName) {
         if (!Double.isFinite(price) || price < 0 || price > Long.MAX_VALUE || price != Math.rint(price)) {
             MESSAGEUTILS.sendLang(requester, "buy.no-currency");
             return;
@@ -170,10 +171,13 @@ public class Rank {
             return;
         }
         try {
-            debitRequest.apply((long) price).whenComplete((debited, error) ->
+            AxRankMenu.getPurchaseRecoveryStore()
+                    .getOrCreate(playerUuid, currencyName, rankName, (long) price)
+                    .thenCompose(pending -> debitRequest.apply((long) price, pending.idempotencyKey()))
+                    .whenComplete((debited, error) ->
                     Scheduler.get().run(requester, task -> {
-                            REMOTE_CURRENCY_PURCHASES.remove(playerUuid);
                             if (error != null) {
+                                REMOTE_CURRENCY_PURCHASES.remove(playerUuid);
                                 Throwable cause = error;
                                 while (cause instanceof java.util.concurrent.CompletionException
                                         && cause.getCause() != null) {
@@ -184,17 +188,26 @@ public class Rank {
                                         currencyName + " rank purchase could not be confirmed for " + playerUuid
                                                 + "; no rank actions were run.",
                                         cause);
+                                AxRankMenu.getInstance().getLogger().warning(
+                                        "The pending purchase identity was retained; retrying the same rank "
+                                                + "and amount will reuse its idempotency key.");
                                 Player online = Bukkit.getPlayer(playerUuid);
                                 if (online != null) {
                                     MESSAGEUTILS.sendLang(online, "buy.no-currency");
                                 }
                             } else if (Boolean.TRUE.equals(debited)) {
                                 executeBuyActions(playerUuid, playerName, price);
+                                clearPendingPurchase(playerUuid, currencyName, rankName)
+                                        .whenComplete((ignored, clearError) ->
+                                                REMOTE_CURRENCY_PURCHASES.remove(playerUuid));
                             } else {
                                 Player online = Bukkit.getPlayer(playerUuid);
                                 if (online != null) {
                                     MESSAGEUTILS.sendLang(online, "buy.no-currency");
                                 }
+                                clearPendingPurchase(playerUuid, currencyName, rankName)
+                                        .whenComplete((ignored, clearError) ->
+                                                REMOTE_CURRENCY_PURCHASES.remove(playerUuid));
                             }
                         }, () -> {
                             REMOTE_CURRENCY_PURCHASES.remove(playerUuid);
@@ -212,6 +225,23 @@ public class Rank {
                     exception);
             MESSAGEUTILS.sendLang(requester, "buy.no-currency");
         }
+    }
+
+    private java.util.concurrent.CompletableFuture<Void> clearPendingPurchase(
+            UUID playerUuid, String currencyName, String rankName) {
+        return AxRankMenu.getPurchaseRecoveryStore().clear(playerUuid, currencyName, rankName)
+                .whenComplete((ignored, error) -> {
+                    if (error == null) return;
+                    Throwable cause = error;
+                    while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+                        cause = cause.getCause();
+                    }
+                    AxRankMenu.getInstance().getLogger().log(
+                            java.util.logging.Level.SEVERE,
+                            "Could not clear purchase recovery state for " + playerUuid
+                                    + "; a later retry may replay rank actions.",
+                            cause);
+                });
     }
 
     private void executeBuyActions(UUID playerUuid, String playerName, double price) {

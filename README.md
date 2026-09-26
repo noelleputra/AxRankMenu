@@ -18,6 +18,14 @@ endpoint, port, or API key is required. Rank purchases debit the balance
 atomically before purchase actions run. Service/database errors fail closed
 and do not execute actions.
 
+Atomic-currency purchases retain a local pending idempotency key until the
+debit is rejected or the configured rank actions have been dispatched. If the
+debit response is ambiguous, retry the same player/rank at the same amount to
+reuse the key and avoid a second debit. If the server crashes partway through
+arbitrary configured actions, those actions may run again on recovery; make
+purchase actions idempotent (for example, setting a permission rather than
+adding a non-idempotent balance).
+
 Enable the currencies with `hooks.Allium.register` and
 `hooks.VotePoints.register` in `plugins/AxRankMenu/config.yml`. Remove any old
 `hooks.Allium` URL, API-key, and timeout entries from AxRankMenu's config;
